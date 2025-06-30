@@ -1,0 +1,131 @@
+- name: Deploy complete virtual server stack on Azure
+  hosts: localhost
+  connection: local
+  vars:
+    location: eastus
+    resource_group: myResourceGroup
+    vnet_name: myVnet
+    subnet_name: mySubnet
+    public_ip_name: myPublicIP
+    nsg_name: myNSG
+    nic_name: myNIC
+    vm_name: myVM
+    admin_username: azureuser
+    admin_password: "server@12345"
+
+  tasks:
+
+    - name: Create Resource Group
+      azure_rm_resourcegroup:
+        name: "{{ resource_group }}"
+        location: "{{ location }}"
+
+    - name: Confirm resource group exists
+      azure_rm_resourcegroup_info:
+        name: myResourceGroup
+      
+    - name: Create Virtual Network
+      azure_rm_virtualnetwork:
+        name: "{{ vnet_name }}"
+        resource_group: "{{ resource_group }}"
+        location: "{{ location }}"
+        address_prefixes: "10.0.0.0/16"
+
+    - name: Create Subnet
+      azure_rm_subnet:
+        name: "{{ subnet_name }}"
+        resource_group: "{{ resource_group }}"
+        address_prefix: "10.0.1.0/24"
+        virtual_network: "{{ vnet_name }}"
+
+    - name: Create Public IP Address
+      azure_rm_publicipaddress:
+        name: "{{ public_ip_name }}"
+        resource_group: "{{ resource_group }}"
+        location: "{{ location }}"
+        allocation_method: Static
+      register: output_ip_address
+
+    - name: Wait for Public IP to be ready
+      azure_rm_publicipaddress_info:
+        resource_group: myResourceGroup
+        name: myPublicIP
+      register: ip_check
+      until: ip_check is success
+      retries: 5
+      delay: 5
+
+    - name: Confirm resource group exists
+      azure_rm_resourcegroup_info:
+        name: myResourceGroup
+      register: resource_group_info
+      until: resource_group_info is success
+      retries: 5
+      delay: 5
+
+    - name: Create Network Security Group (NSG) with SSH rule
+      azure_rm_securitygroup:
+        name: "{{ nsg_name }}"
+        resource_group: "{{ resource_group }}"
+        location: "{{ location }}"
+        rules:
+          - name: AllowSSH
+            priority: 1001
+            direction: Inbound
+            access: Allow
+            protocol: Tcp
+            destination_port_range: 22
+    - name: Check existing public IP
+      azure_rm_publicipaddress_info:
+        resource_group: myResourceGroup
+        name: myPublicIP
+
+    - name: Check subnet
+      azure_rm_subnet_info:
+        resource_group: myResourceGroup
+        name: mySubnet
+        virtual_network_name: myVnet
+
+    - name: Create Network Interface
+      azure_rm_networkinterface:
+        name: "{{ nic_name }}"
+        resource_group: "{{ resource_group }}"
+        location: "{{ location }}"
+        virtual_network: "{{ vnet_name }}"
+        subnet_name: "{{ subnet_name }}"
+        security_group: "{{ nsg_name }}"
+        ip_configurations:
+          - name: ipconfig1
+            public_ip_address_name: "{{ public_ip_name }}"
+
+
+    - name: Get NIC details
+      azure_rm_networkinterface_info:
+        name: myNIC
+        resource_group: myResourceGroup
+      register: nic_info
+
+    - name: Show NIC
+      debug:
+        var: nic_info
+
+    - name: Create Ubuntu Virtual Machine
+      azure_rm_virtualmachine:
+        name: "{{ vm_name }}"
+        resource_group: "{{ resource_group }}"
+        location: "{{ location }}"
+        vm_size: Standard_B2s
+        admin_username: "{{ admin_username }}"
+        admin_password: "{{ admin_password }}"
+        ssh_password_enabled: true
+        managed_disk_type: Standard_LRS
+        network_interfaces: "{{ nic_name }}"
+        image:
+          offer: 0001-com-ubuntu-server-jammy
+          publisher: Canonical
+          sku: 22_04-lts
+          version: latest
+
+    - name: Output public IP
+      debug:
+        msg: "VM Public IP: {{ hostvars.localhost.output_ip_address.state.ip_address }}"
